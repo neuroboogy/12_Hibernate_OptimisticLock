@@ -79,6 +79,7 @@ public class MainApp {
 
 //                        System.out.println(Thread.currentThread().getName() + " : " + item);
 
+                            
                             session.getTransaction().commit();
                             updated = true;
                         } catch (OptimisticLockException e) {
