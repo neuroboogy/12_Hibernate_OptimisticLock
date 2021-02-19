@@ -2,6 +2,7 @@ import org.hibernate.Session;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Configuration;
 
+import javax.persistence.LockModeType;
 import javax.persistence.OptimisticLockException;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -16,16 +17,13 @@ public class MainApp {
 
         dropAndCreateTable();
         fillTable(rawCount, 0);
-
-        long time = System.currentTimeMillis();
-        updateTable(rawCount, threadCount);
-        System.out.println("Time : " + (System.currentTimeMillis() - time));
-
-        getItemsSum();
+        updateTableWithOptimisticLock(rawCount, threadCount);
+        updateTableWithPessimisticLock(rawCount, threadCount);
+        getSumOfVal();
     }
 
 
-    public static void getItemsSum() {
+    public static void getSumOfVal() {
         SessionFactory factory = new Configuration()
                 .configure("hibernate.cfg.xml")
                 .addAnnotatedClass(Item.class)
@@ -48,13 +46,86 @@ public class MainApp {
         }
     }
 
-    public static void updateTable(int rawCount, int threadCount) {
+    public static void updateTableWithPessimisticLock(int rawCount, int threadCount) {
         SessionFactory factory = new Configuration()
                 .configure("hibernate.cfg.xml")
                 .addAnnotatedClass(Item.class)
                 .buildSessionFactory();
 
         CountDownLatch cdl = new CountDownLatch(threadCount);
+
+        long time = System.currentTimeMillis();
+
+        for (int t=0;t<threadCount;t++) {
+            new Thread(() -> {
+                System.out.println("Thread #" + Thread.currentThread().getName() + " started");
+
+                for (int i=0;i<20000;i++) {
+                    int idx = (int) (Math.random() * rawCount);
+
+                    boolean updated = false;
+                    while (!updated) {
+                        Session session = factory.getCurrentSession();
+                        session.beginTransaction();
+
+                        try {
+                            Thread.sleep(5);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+
+                        try {
+                            String request = "FROM Items WHERE id = " + (idx + 1);
+                            Item item = session
+                                    .createQuery("FROM Item i WHERE i.id = :id", Item.class)
+                                    .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                                    .setParameter("id", idx+1)
+                                    .getSingleResult();
+
+                            item.setVal(item.getVal() + 1);
+
+//                        System.out.println(Thread.currentThread().getName() + " : " + item);
+
+
+                            session.getTransaction().commit();
+                            updated = true;
+                        } catch (OptimisticLockException e) {
+                            session.getTransaction().rollback();
+//                            System.out.println("Thread #" + Thread.currentThread().getName() + " rollback");
+//                        e.printStackTrace();
+                        }
+
+                        if (session != null) {
+                            session.close();
+                        }
+                    }
+                }
+
+                cdl.countDown();
+            }
+            ).start();
+        }
+
+        try {
+            System.out.println("cdl.await() : ");
+            cdl.await();
+            System.out.println("OK");
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("PessimisticLock Time : " + (System.currentTimeMillis() - time));
+    }
+
+    public static void updateTableWithOptimisticLock(int rawCount, int threadCount) {
+        SessionFactory factory = new Configuration()
+                .configure("hibernate.cfg.xml")
+                .addAnnotatedClass(Item.class)
+                .buildSessionFactory();
+
+        CountDownLatch cdl = new CountDownLatch(threadCount);
+
+        long time = System.currentTimeMillis();
+
         for (int t=0;t<threadCount;t++) {
             new Thread(() -> {
                 System.out.println("Thread #" + Thread.currentThread().getName() + " started");
@@ -79,12 +150,12 @@ public class MainApp {
 
 //                        System.out.println(Thread.currentThread().getName() + " : " + item);
 
-                            
+
                             session.getTransaction().commit();
                             updated = true;
                         } catch (OptimisticLockException e) {
                             session.getTransaction().rollback();
-                            System.out.println("Thread #" + Thread.currentThread().getName() + " rollback");
+//                            System.out.println("Thread #" + Thread.currentThread().getName() + " rollback");
 //                        e.printStackTrace();
                         }
 
@@ -106,8 +177,8 @@ public class MainApp {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
+        System.out.println("OptimisticLock Time : " + (System.currentTimeMillis() - time));
     }
-
 
     public static void fillTable(int rawCount, int value) {
         SessionFactory factory = new Configuration()
